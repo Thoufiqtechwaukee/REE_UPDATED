@@ -1,0 +1,512 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Resume Depth - Detailed Evaluation</title>
+<script src="https://cdn.tailwindcss.com"></script>
+<script>
+  tailwind.config = {
+    theme: {
+      extend: {
+        colors: {
+          beige: {
+            50: '#FDFCFB', 100: '#FCFAF8', 200: '#F5F2EB', 300: '#E8E2D9',
+            400: '#D4CACA', 500: '#8C6246', 600: '#7A726D', 800: '#4A433F', 900: '#2E2926',
+          },
+          earth: {
+            sage:  { light: '#EFF5F0', border: '#CDE0D2', text: '#2E5939' },
+            ochre: { light: '#FDF8F3', border: '#F2DDBE', text: '#9E6A23' },
+            clay:  { light: '#FCF3F2', border: '#F0CACA', text: '#9B3831' },
+            slate: { light: '#F0F4F8', border: '#D9E2EC', text: '#486581' }
+          }
+        },
+        fontFamily: { sans: ['Inter', 'sans-serif'], serif: ['Lora', 'serif'] }
+      }
+    }
+  }
+</script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Lora:ital,wght@0,400;0,500;0,600;0,700;1,400;1,600&display=swap" rel="stylesheet">
+<script src="https://unpkg.com/@phosphor-icons/web"></script>
+<style>
+  body { font-family:'Inter',sans-serif; background:#F5F2EB; color:#4A433F; -webkit-font-smoothing:antialiased; }
+
+  /* each result card eases in the moment its check lands */
+  @keyframes riseIn { from { opacity:0; transform:translateY(14px); } to { opacity:1; transform:none; } }
+  .rise { animation: riseIn .5s cubic-bezier(.22,1,.36,1) both; }
+
+  @keyframes pulseSoft { 0%,100% { opacity:1; } 50% { opacity:.45; } }
+  .pulsing { animation: pulseSoft 1.4s ease-in-out infinite; }
+
+  .spin { animation: spin 0.8s linear infinite; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+
+  /* expanding detail drawer */
+  .drawer { display:grid; grid-template-rows:0fr; transition:grid-template-rows .38s cubic-bezier(.22,1,.36,1); }
+  .drawer > div { overflow:hidden; }
+  .row.open .drawer { grid-template-rows:1fr; }
+  .row.open .chev { transform: rotate(180deg); }
+  .chev { transition: transform .3s ease; }
+
+  .bar > i { display:block; height:100%; width:0; border-radius:inherit;
+             transition: width 1.1s cubic-bezier(.22,1,.36,1); }
+
+  .chip { transition: transform .15s ease, box-shadow .15s ease, opacity .2s ease; cursor:default; }
+  .chip:hover { transform: translateY(-2px); box-shadow: 0 4px 10px rgba(46,41,38,.10); }
+  .chip.dimmed { opacity:.22; }
+
+  .drop.over { border-color:#8C6246 !important; background:#FCFAF8 !important; transform: scale(1.01); }
+  .drop { transition: all .2s ease; }
+
+  @media print {
+    .no-print { display:none !important; }
+    body { background:#fff; }
+    .row .drawer { grid-template-rows:1fr !important; }
+  }
+</style>
+</head>
+<body class="min-h-screen flex flex-col">
+
+<nav class="no-print w-full px-6 py-4 flex items-center justify-between border-b border-beige-300 bg-beige-100/80 backdrop-blur-md sticky top-0 z-50">
+  <div class="flex items-center space-x-3">
+    <div class="w-9 h-9 bg-beige-900 rounded-lg flex items-center justify-center text-beige-100 shadow-sm">
+      <i class="ph ph-file-text text-xl"></i>
+    </div>
+    <div>
+      <h1 class="text-lg font-serif font-bold text-beige-900 tracking-tight leading-tight">REE FINAL</h1>
+      <p class="text-[11px] text-beige-600 leading-tight" id="navSub">Multi-Domain Resume Depth Engine</p>
+    </div>
+  </div>
+  <div class="flex items-center space-x-3">
+    <button id="btnPrint" class="hidden text-sm font-medium text-beige-600 hover:text-beige-900 transition-colors">
+      <i class="ph ph-printer align-middle"></i> Export Report
+    </button>
+    <button id="btnNew" class="hidden text-sm font-medium px-3 py-1.5 rounded-lg bg-beige-900 text-beige-100 hover:bg-beige-800 transition-colors">
+      New Resume
+    </button>
+  </div>
+</nav>
+
+<main class="w-full max-w-6xl mx-auto px-4 sm:px-6 lg:px-8 pt-10 pb-20 flex flex-col flex-grow">
+
+  <!-- ============================ UPLOAD ============================ -->
+  <section id="viewUpload">
+    <div class="text-center mb-10">
+      <h2 class="text-4xl sm:text-5xl font-serif font-black text-beige-900 tracking-tight mb-3">
+        Turn Resumes into Deep Insights
+      </h2>
+      <p class="text-beige-600 text-base sm:text-lg">
+        Four evidence-backed checks. Every score traced to what the resume actually says.
+      </p>
+    </div>
+
+    <div id="drop" class="drop cursor-pointer border-2 border-dashed border-beige-400 rounded-2xl bg-beige-100/60 py-16 px-6 text-center hover:bg-beige-100">
+      <div class="w-16 h-16 mx-auto rounded-2xl bg-earth-slate-light border border-earth-slate-border flex items-center justify-center text-earth-slate-text mb-5">
+        <i class="ph ph-file-arrow-up text-3xl"></i>
+      </div>
+      <h3 class="text-2xl font-serif font-bold text-beige-900 mb-1">Drop your resume here</h3>
+      <p class="text-beige-600 text-sm mb-5">or click to browse from your device</p>
+      <span class="inline-flex items-center gap-2 px-5 py-2.5 rounded-lg bg-beige-900 text-beige-100 text-sm font-semibold shadow-sm">
+        <i class="ph ph-folder-open"></i> Select Resume
+      </span>
+      <p class="text-xs text-beige-500 mt-5" id="backendNote">&nbsp;</p>
+    </div>
+    <input type="file" id="file" accept=".pdf,.docx,.txt,.md" hidden>
+
+    <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 mt-8">
+      <div class="bg-beige-100 border border-beige-300 rounded-xl p-5">
+        <div class="w-10 h-10 rounded-lg bg-earth-slate-light border border-earth-slate-border flex items-center justify-center text-earth-slate-text mb-3"><i class="ph ph-brain text-xl"></i></div>
+        <h4 class="font-bold text-beige-900 text-sm mb-1">Skill Extraction</h4>
+        <p class="text-xs text-beige-600 leading-relaxed">Every claimed skill is pulled out and checked against the work described.</p>
+      </div>
+      <div class="bg-beige-100 border border-beige-300 rounded-xl p-5">
+        <div class="w-10 h-10 rounded-lg bg-earth-sage-light border border-earth-sage-border flex items-center justify-center text-earth-sage-text mb-3"><i class="ph ph-briefcase text-xl"></i></div>
+        <h4 class="font-bold text-beige-900 text-sm mb-1">Role Aware</h4>
+        <p class="text-xs text-beige-600 leading-relaxed">The role is detected first, then judged on what that role is expected to have.</p>
+      </div>
+      <div class="bg-beige-100 border border-beige-300 rounded-xl p-5">
+        <div class="w-10 h-10 rounded-lg bg-earth-ochre-light border border-earth-ochre-border flex items-center justify-center text-earth-ochre-text mb-3"><i class="ph ph-chart-bar text-xl"></i></div>
+        <h4 class="font-bold text-beige-900 text-sm mb-1">Grounded Scoring</h4>
+        <p class="text-xs text-beige-600 leading-relaxed">Claims the model cannot prove in the text are dropped before scoring.</p>
+      </div>
+      <div class="bg-beige-100 border border-beige-300 rounded-xl p-5">
+        <div class="w-10 h-10 rounded-lg bg-earth-clay-light border border-earth-clay-border flex items-center justify-center text-earth-clay-text mb-3"><i class="ph ph-lightning text-xl"></i></div>
+        <h4 class="font-bold text-beige-900 text-sm mb-1">Streamed Results</h4>
+        <p class="text-xs text-beige-600 leading-relaxed">Each card appears the moment its check finishes, not at the very end.</p>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============================ PROGRESS ============================ -->
+  <section id="viewProgress" class="hidden">
+    <div class="bg-beige-100 border border-beige-300 rounded-2xl p-8 sm:p-10 shadow-sm max-w-3xl mx-auto w-full">
+      <div class="flex items-center gap-3 mb-2">
+        <i class="ph ph-circle-notch text-2xl text-beige-500 spin"></i>
+        <h3 class="text-2xl font-serif font-bold text-beige-900" id="progTitle">Reading the resume</h3>
+      </div>
+      <p class="text-sm text-beige-600 mb-8" id="progFile">&nbsp;</p>
+
+      <div class="h-1.5 bg-beige-300 rounded-full overflow-hidden mb-8 bar">
+        <i class="bg-beige-900" id="progBar"></i>
+      </div>
+
+      <ol id="steps" class="space-y-3"></ol>
+    </div>
+  </section>
+
+  <!-- ============================ ERROR ============================ -->
+  <section id="viewError" class="hidden">
+    <div class="max-w-3xl mx-auto w-full bg-earth-clay-light border border-earth-clay-border rounded-2xl p-8">
+      <div class="flex items-center gap-2 mb-3 text-earth-clay-text">
+        <i class="ph-bold ph-warning-octagon text-xl"></i>
+        <h3 class="font-bold">Analysis stopped</h3>
+      </div>
+      <p class="text-sm text-earth-clay-text/90 leading-relaxed" id="errText"></p>
+    </div>
+  </section>
+
+  <!-- ============================ REPORT ============================ -->
+  <section id="viewReport" class="hidden">
+    <header class="flex flex-col md:flex-row md:items-end justify-between mb-8 pb-6 border-b-2 border-beige-300">
+      <div class="mb-6 md:mb-0 flex items-start space-x-4">
+        <div class="hidden sm:flex mt-1 w-12 h-12 bg-earth-slate-light border border-earth-slate-border rounded-xl items-center justify-center text-earth-slate-text">
+          <i class="ph ph-file-magnifying-glass text-2xl"></i>
+        </div>
+        <div>
+          <h2 class="text-4xl font-serif font-bold text-beige-900 tracking-tight mb-2">Resume Depth</h2>
+          <div class="flex flex-wrap items-center gap-2 text-beige-600 text-sm">
+            <span>Reviewed as:</span>
+            <span class="font-semibold text-beige-900 bg-beige-200 px-2 py-0.5 rounded border border-beige-300" id="roleChip">&hellip;</span>
+            <span class="text-beige-500" id="fileChip"></span>
+          </div>
+        </div>
+      </div>
+
+      <div class="flex flex-col items-start md:items-end">
+        <span class="text-xs font-bold uppercase tracking-widest text-beige-500 mb-1">Overall Score</span>
+        <div class="flex items-center space-x-3">
+          <div class="text-6xl font-serif font-black text-beige-900 leading-none" id="overall">--</div>
+          <div class="flex flex-col items-start justify-center h-full pt-1" id="overallIcon"></div>
+        </div>
+        <div class="w-40 h-1.5 bg-beige-300 rounded-full overflow-hidden mt-3 bar">
+          <i id="overallBar" class="bg-beige-900"></i>
+        </div>
+      </div>
+    </header>
+
+    <div class="bg-beige-100 rounded-2xl border border-beige-300 shadow-sm overflow-hidden">
+      <div class="hidden md:grid grid-cols-12 gap-6 px-8 py-4 bg-beige-50 border-b border-beige-300">
+        <div class="col-span-2 text-xs font-bold uppercase tracking-wider text-beige-500">What we check</div>
+        <div class="col-span-9 text-xs font-bold uppercase tracking-wider text-beige-500">Why it matters</div>
+        <div class="col-span-1 text-xs font-bold uppercase tracking-wider text-beige-500 text-center">Status</div>
+      </div>
+      <div id="rows"></div>
+    </div>
+
+    <div class="mt-8 bg-earth-slate-light/60 border border-earth-slate-border rounded-xl p-6 shadow-sm hidden" id="actionBox">
+      <div class="flex items-center space-x-2 mb-3">
+        <i class="ph-bold ph-lightbulb text-lg text-earth-slate-text"></i>
+        <h4 class="text-sm font-bold text-earth-slate-text uppercase tracking-wide">Recommended Action</h4>
+      </div>
+      <p class="text-sm text-earth-slate-text/90 leading-relaxed max-w-5xl" id="actionText"></p>
+    </div>
+  </section>
+</main>
+
+<footer class="w-full border-t border-beige-300 bg-beige-100 py-8 mt-auto no-print">
+  <div class="max-w-6xl mx-auto px-6 flex flex-col sm:flex-row items-center justify-center text-sm text-beige-500 font-medium space-y-2 sm:space-y-0">
+    <span>&copy; 2026 REE FINAL. All rights reserved.</span>
+    <span class="hidden sm:inline mx-4 h-4 w-px bg-beige-300"></span>
+    <span>Multi-Domain Resume Depth Engine</span>
+  </div>
+</footer>
+
+<script>
+const $ = id => document.getElementById(id);
+const ORDER = ["experience", "evidence", "growth", "completeness"];
+
+const META = {
+  experience:   { icon: "ph-briefcase",       why: "The system reads the project content to see what work they have really done, and the dates to see how long they did it for." },
+  evidence:     { icon: "ph-seal-check",      why: "We check that the skills they claim actually show up in the work they described." },
+  growth:       { icon: "ph-trend-up",        why: "Do the job titles rise over time? Junior to Senior to Lead shows someone trusted with more. A flat line for eight years does not." },
+  completeness: { icon: "ph-list-checks",     why: "Are the basic parts there - a summary, a skill list, education, certificates. Missing pieces cost the candidate nothing to fix." },
+};
+
+const TONE = {
+  pass:  { icon: "ph-check-circle",   text: "text-earth-sage-text",  border: "border-earth-sage-border",  bar: "bg-earth-sage-text",  label: "Strong" },
+  warn:  { icon: "ph-warning-circle", text: "text-earth-ochre-text", border: "border-earth-ochre-border", bar: "bg-earth-ochre-text", label: "Needs work" },
+  fail:  { icon: "ph-x-circle",       text: "text-earth-clay-text",  border: "border-earth-clay-border",  bar: "bg-earth-clay-text",  label: "Weak" },
+  error: { icon: "ph-minus-circle",   text: "text-beige-500",        border: "border-beige-400",          bar: "bg-beige-400",        label: "Skipped" },
+};
+
+const STRENGTH = {
+  strong:   { cls: "bg-earth-sage-light text-earth-sage-text border-earth-sage-border",   label: "Proven" },
+  moderate: { cls: "bg-earth-ochre-light text-earth-ochre-text border-earth-ochre-border", label: "Mentioned" },
+  claimed:  { cls: "bg-white text-earth-clay-text border-earth-clay-border",               label: "Unproven" },
+};
+
+const esc = s => String(s ?? "").replace(/[&<>"]/g, c => ({ "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;" }[c]));
+const show = (...ids) => ["viewUpload","viewProgress","viewReport","viewError"]
+  .forEach(v => $(v).classList.toggle("hidden", !ids.includes(v)));
+
+/* which model is answering */
+fetch("/api/backend").then(r => r.json()).then(b => {
+  $("backendNote").textContent = b.local
+    ? "Analysed locally by " + b.model + " - nothing leaves this machine"
+    : "Analysed by " + b.model + " on " + b.host + " - your resume is sent there";
+  $("navSub").textContent = b.model + " · " + b.host;
+}).catch(() => {});
+
+/* ---------------- file pickup ---------------- */
+$("drop").onclick = () => $("file").click();
+$("drop").ondragover = e => { e.preventDefault(); $("drop").classList.add("over"); };
+$("drop").ondragleave = () => $("drop").classList.remove("over");
+$("drop").ondrop = e => { e.preventDefault(); $("drop").classList.remove("over");
+  if (e.dataTransfer.files[0]) analyse(e.dataTransfer.files[0]); };
+$("file").onchange = e => { if (e.target.files[0]) analyse(e.target.files[0]); };
+$("btnNew").onclick = () => location.reload();
+$("btnPrint").onclick = () => window.print();
+
+/* ---------------- progress stepper ---------------- */
+function buildSteps() {
+  $("steps").innerHTML = ORDER.map(k => `
+    <li id="st-${k}" class="flex items-center gap-3 text-sm text-beige-500">
+      <i class="ph ph-circle-dashed text-lg"></i>
+      <span class="font-medium capitalize">${k}</span>
+      <span class="ml-auto text-xs" data-state>waiting</span>
+    </li>`).join("");
+}
+function markStep(key, state, score) {
+  const li = $("st-" + key); if (!li) return;
+  const icon = li.querySelector("i"), tag = li.querySelector("[data-state]");
+  if (state === "running") {
+    li.className = "flex items-center gap-3 text-sm text-beige-900 font-semibold";
+    icon.className = "ph ph-circle-notch text-lg spin text-beige-900";
+    tag.textContent = "analysing";
+  } else {
+    const tone = TONE[state] || TONE.warn;
+    li.className = "flex items-center gap-3 text-sm text-beige-800";
+    icon.className = `ph-bold ${tone.icon} text-lg ${tone.text}`;
+    tag.textContent = score + "/100";
+    tag.className = "ml-auto text-xs font-bold " + tone.text;
+  }
+}
+
+/* ---------------- run ---------------- */
+let done = 0;
+
+async function analyse(file) {
+  done = 0;
+  buildSteps();
+  show("viewProgress");
+  $("progFile").textContent = file.name;
+  $("fileChip").textContent = "· " + file.name;
+  $("rows").innerHTML = "";
+  $("actionBox").classList.add("hidden");
+  $("btnPrint").classList.add("hidden");
+  $("btnNew").classList.remove("hidden");
+  markStep("experience", "running");
+
+  const body = new FormData();
+  body.append("file", file);
+
+  let res;
+  try {
+    res = await fetch("/api/analyze", { method: "POST", body });
+  } catch {
+    return fail("Could not reach the server. Is <code>uvicorn app:app</code> still running?");
+  }
+
+  const reader = res.body.getReader(), dec = new TextDecoder();
+  let buf = "";
+  while (true) {
+    const { value, done: fin } = await reader.read();
+    if (fin) break;
+    buf += dec.decode(value, { stream: true });
+    let i;
+    while ((i = buf.indexOf("\n\n")) !== -1) {
+      const chunk = buf.slice(0, i); buf = buf.slice(i + 2);
+      const ev = (chunk.match(/^event: (.+)$/m) || [])[1];
+      const raw = (chunk.match(/^data: (.+)$/m) || [])[1];
+      if (ev && raw) handle(ev, JSON.parse(raw));
+    }
+  }
+}
+
+function handle(ev, d) {
+  if (ev === "error") return fail(esc(d.message));
+  if (ev === "step")  $("progTitle").textContent = d.message.replace(/\.\.\.$/, "");
+  if (ev === "role")  { $("roleChip").textContent = d.seniority + " " + d.role;
+                        $("progTitle").textContent = "Scoring as " + d.seniority + " " + d.role; }
+  if (ev === "check") {
+    markStep(d.key, d.status, d.score);
+    done++;
+    $("progBar").style.width = (done / ORDER.length * 100) + "%";
+    const next = ORDER[ORDER.indexOf(d.key) + 1];
+    if (next) markStep(next, "running");
+    if (done === 1) show("viewReport");
+    addRow(d);
+  }
+  if (ev === "done") finish(d);
+}
+
+/* ---------------- one result row ---------------- */
+function addRow(c) {
+  const tone = TONE[c.status] || TONE.warn;
+  const meta = META[c.key] || { icon: "ph-circle", why: c.why || "" };
+  const failed = c.status === "error";
+  const x = c.extra || {};
+
+  // sort so proven skills read first, unproven last
+  const rank = { strong: 0, moderate: 1, claimed: 2 };
+  const skills = (x.skills || []).slice().sort((a, b) => rank[a.strength] - rank[b.strength]);
+  const counts = { strong: 0, moderate: 0, claimed: 0 };
+  skills.forEach(s => counts[s.strength] !== undefined && counts[s.strength]++);
+
+  const chips = skills.map(s => {
+    const st = STRENGTH[s.strength] || STRENGTH.moderate;
+    return `<span class="chip inline-flex items-center px-2.5 py-1 rounded-full text-[11px] font-semibold border ${st.cls}"
+                  data-strength="${s.strength}" title="${esc(s.note || st.label)}">${esc(s.name)}</span>`;
+  }).join("");
+
+  const filters = skills.length ? `
+    <div class="flex flex-wrap items-center gap-2 mb-3">
+      <span class="text-[11px] font-bold uppercase tracking-wider text-beige-500 mr-1">Filter</span>
+      ${[["all","All",skills.length],["strong","Proven",counts.strong],["moderate","Mentioned",counts.moderate],["claimed","Unproven",counts.claimed]]
+        .filter(f => f[2] > 0)
+        .map(([k,l,n],i) => `<button data-filter="${k}"
+          class="filt px-2.5 py-1 rounded-full text-[11px] font-semibold border transition-colors
+                 ${i===0 ? 'bg-beige-900 text-beige-100 border-beige-900' : 'bg-beige-50 text-beige-600 border-beige-300 hover:border-beige-400'}"
+          >${l} ${n}</button>`).join("")}
+    </div>` : "";
+
+  const missing = (x.missing || []).length ? `
+    <div class="mt-4">
+      <p class="text-[11px] font-bold uppercase tracking-wider text-earth-clay-text mb-2">Not found in this resume</p>
+      <div class="flex flex-wrap gap-2">
+        ${x.missing.map(m => `<span class="chip inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-[11px] font-semibold bg-white text-earth-clay-text border border-earth-clay-border"><i class="ph ph-x-circle"></i>${esc(m)}</span>`).join("")}
+      </div>
+    </div>` : "";
+
+  const present = (x.present || []).length ? `
+    <div class="mt-4">
+      <p class="text-[11px] font-bold uppercase tracking-wider text-earth-sage-text mb-2">Present</p>
+      <div class="flex flex-wrap gap-2">
+        ${x.present.map(m => `<span class="chip inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-[11px] font-semibold bg-earth-sage-light text-earth-sage-text border border-earth-sage-border"><i class="ph ph-check"></i>${esc(m)}</span>`).join("")}
+      </div>
+    </div>` : "";
+
+  const badges = [
+    x.total_years ? ["ph-clock", x.total_years] : null,
+    x.trajectory  ? ["ph-trend-up", x.trajectory] : null,
+  ].filter(Boolean).map(([i, t]) =>
+    `<span class="inline-flex items-center gap-1 text-[11px] font-semibold text-beige-600 bg-beige-200 border border-beige-300 px-2 py-0.5 rounded"><i class="ph ${i}"></i>${esc(t)}</span>`
+  ).join("");
+
+  const hasDrawer = !!(c.reasoning || chips || missing || present);
+
+  const row = document.createElement("div");
+  row.className = "row rise grid grid-cols-1 md:grid-cols-12 gap-6 px-6 md:px-8 py-8 border-b border-beige-300 last:border-b-0 hover:bg-beige-50/50 transition-colors";
+  row.innerHTML = `
+    <div class="col-span-1 md:col-span-2">
+      <div class="flex items-center gap-2 mb-2">
+        <i class="ph ${meta.icon} text-lg ${tone.text}"></i>
+        <h3 class="text-base font-bold text-beige-900">${esc(c.title)}</h3>
+      </div>
+      ${failed ? "" : `
+      <div class="text-2xl font-serif font-black text-beige-900 leading-none">${c.score}<span class="text-sm font-sans font-semibold text-beige-500">/100</span></div>
+      <div class="h-1.5 bg-beige-300 rounded-full overflow-hidden mt-2 bar w-24"><i class="${tone.bar}"></i></div>
+      <span class="text-[11px] font-bold uppercase tracking-wider ${tone.text} mt-2 inline-block">${tone.label}</span>`}
+    </div>
+
+    <div class="col-span-1 md:col-span-9 space-y-4">
+      <p class="text-sm text-earth-slate-text font-medium leading-relaxed max-w-3xl">${esc(meta.why)}</p>
+
+      <blockquote class="text-base font-serif font-semibold text-beige-900 italic leading-relaxed border-l-2 ${tone.border} pl-4">
+        ${failed ? esc(c.verdict) : "&ldquo;" + esc(c.verdict) + "&rdquo;"}
+      </blockquote>
+
+      <div class="flex flex-wrap items-center gap-2">
+        <p class="text-sm text-beige-600">${esc(c.detail)}</p>
+        ${badges}
+      </div>
+
+      ${hasDrawer ? `
+      <button class="toggle inline-flex items-center gap-1.5 text-xs font-bold uppercase tracking-wider text-beige-500 hover:text-beige-900 transition-colors">
+        <span class="lbl">Show full justification</span><i class="ph-bold ph-caret-down chev"></i>
+      </button>
+      <div class="drawer"><div>
+        <div class="pt-2">
+          ${c.reasoning ? `<div class="bg-beige-50 border border-beige-300 rounded-xl p-5 mb-4">
+            <p class="text-[11px] font-bold uppercase tracking-wider text-beige-500 mb-2">Why this score</p>
+            <p class="text-sm text-beige-800 leading-relaxed">${esc(c.reasoning)}</p>
+          </div>` : ""}
+          ${filters}
+          <div class="flex flex-wrap gap-2 chipwrap">${chips}</div>
+          ${present}${missing}
+        </div>
+      </div></div>` : ""}
+    </div>
+
+    <div class="col-span-1 md:col-span-1 flex justify-start md:justify-center items-start mt-2 md:mt-0">
+      <i class="ph-bold ${tone.icon} text-2xl ${tone.text}"></i>
+    </div>`;
+
+  $("rows").appendChild(row);
+
+  // animate the score bar after paint
+  const bar = row.querySelector(".bar > i");
+  if (bar) requestAnimationFrame(() => { bar.style.width = c.score + "%"; });
+
+  const toggle = row.querySelector(".toggle");
+  if (toggle) toggle.onclick = () => {
+    row.classList.toggle("open");
+    toggle.querySelector(".lbl").textContent =
+      row.classList.contains("open") ? "Hide full justification" : "Show full justification";
+  };
+
+  row.querySelectorAll(".filt").forEach(btn => btn.onclick = () => {
+    const want = btn.dataset.filter;
+    row.querySelectorAll(".filt").forEach(b => {
+      const on = b === btn;
+      b.className = "filt px-2.5 py-1 rounded-full text-[11px] font-semibold border transition-colors " +
+        (on ? "bg-beige-900 text-beige-100 border-beige-900"
+            : "bg-beige-50 text-beige-600 border-beige-300 hover:border-beige-400");
+    });
+    row.querySelectorAll(".chipwrap .chip").forEach(chip => {
+      chip.classList.toggle("dimmed", want !== "all" && chip.dataset.strength !== want);
+    });
+  });
+}
+
+/* ---------------- finish ---------------- */
+function finish(d) {
+  show("viewReport");
+  const tone = TONE[d.status] || TONE.warn;
+  $("overallIcon").innerHTML = `<i class="ph-fill ${tone.icon} text-3xl ${tone.text}"></i>`;
+  $("btnPrint").classList.remove("hidden");
+
+  // count the headline score up rather than snapping to it
+  const el = $("overall");
+  let n = 0;
+  const tick = setInterval(() => {
+    n += Math.max(1, Math.ceil((d.score - n) / 6));
+    if (n >= d.score) { n = d.score; clearInterval(tick); }
+    el.textContent = n;
+  }, 28);
+  requestAnimationFrame(() => { $("overallBar").style.width = d.score + "%"; });
+  $("overallBar").className = tone.bar;
+
+  if (d.action) { $("actionText").textContent = d.action; $("actionBox").classList.remove("hidden"); }
+}
+
+function fail(html) {
+  show("viewError");
+  $("errText").innerHTML = html;
+  $("btnNew").classList.remove("hidden");
+}
+</script>
+</body>
+</html>
