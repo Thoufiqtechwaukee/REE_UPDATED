@@ -23,6 +23,7 @@ import httpx
 from dotenv import load_dotenv
 from fastapi import FastAPI, File, UploadFile
 from fastapi.responses import FileResponse, StreamingResponse
+from fastapi.staticfiles import StaticFiles
 
 BASE_DIR = Path(__file__).parent
 load_dotenv(BASE_DIR / ".env")
@@ -54,6 +55,7 @@ MAX_RESUME_CHARS = int(os.getenv(
     "12000" if LLM_BACKEND == "groq" else "28000"))
 
 app = FastAPI(title="Resume Depth")
+app.mount("/static", StaticFiles(directory=BASE_DIR / "static"), name="static")
 
 
 # --------------------------------------------------------------------------
