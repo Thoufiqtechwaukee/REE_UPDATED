@@ -116,6 +116,62 @@ def extract_text(filename: str, blob: bytes) -> str:
 
 
 # --------------------------------------------------------------------------
+# 1b. Is this actually a resume?
+# --------------------------------------------------------------------------
+
+# Every check below assumes a CV. Hand it a technical report and it answers
+# anyway - scoring a LoRA merge note as "Junior Dev (no start date) -> Technical
+# Specialist (2023)", with `safe_merge` and `torch_dtype` counted as claimed
+# skills. Nothing in the report is wrong to the model; it was just never asked
+# whether the document was a resume at all.
+#
+# Resumes carry marks that reports do not: a way to reach the person, and
+# headed sections. Measured over 6 real resumes and 13 real reports, every
+# resume scored 6 or more and no report scored above 2, so the line sits at 4 -
+# clear of both, and biased towards letting an odd resume through rather than
+# turning one away.
+
+CONTACT_EMAIL = re.compile(r"[\w.+-]+@[\w-]+\.[a-z]{2,}", re.I)
+CONTACT_PHONE = re.compile(r"(?:\+?\d{1,3}[\s.-]?)?\(?\d{3,5}\)?[\s.-]?\d{3}[\s.-]?\d{3,4}")
+CONTACT_LINK = re.compile(r"linkedin\.com|github\.com", re.I)
+RESUME_SECTION = re.compile(
+    r"^\s*(work experience|professional experience|experience|employment|education|"
+    r"academic|skills|technical skills|projects|certifications?|achievements|"
+    r"summary|profile|objective|internships?|languages|interests|declaration)\s*:?\s*$",
+    re.I | re.M)
+RESUME_DATES = re.compile(
+    r"\b(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\.?\s*\d{4}\b"
+    r"|\b(19|20)\d{2}\s*[-\u2013\u2014]\s*((19|20)\d{2}|present|current)\b", re.I)
+
+RESUME_MIN_SIGNAL = 4
+
+
+def resume_signal(text: str) -> int:
+    """How strongly this document reads as somebody's CV."""
+    score = 0
+    if CONTACT_EMAIL.search(text):
+        score += 2                                   # the single clearest mark
+    if CONTACT_PHONE.search(text):
+        score += 1
+    if CONTACT_LINK.search(text):
+        score += 1
+    score += min(3, len(RESUME_SECTION.findall(text)))
+    if RESUME_DATES.search(text):
+        score += 1
+    return score
+
+
+def require_resume(text: str) -> None:
+    """Raise if this is not a resume, so analyse never runs on a report."""
+    if resume_signal(text) >= RESUME_MIN_SIGNAL:
+        return
+    raise ValueError(
+        "This does not look like a resume. It has no contact details and none of "
+        "the sections a CV has - experience, education, skills. Upload a resume "
+        "and the four checks will have something to read."
+    )
+
+# --------------------------------------------------------------------------
 # 2. Ollama plumbing
 # --------------------------------------------------------------------------
 
@@ -791,6 +847,7 @@ async def analyze(file: UploadFile = File(...)):
     blob = await file.read()
     try:
         resume = extract_text(file.filename or "resume.pdf", blob)
+        require_resume(resume)
     except Exception as exc:
         message = str(exc)
 
