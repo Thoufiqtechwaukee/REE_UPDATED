@@ -22,7 +22,8 @@ from pathlib import Path
 import httpx
 from dotenv import load_dotenv
 from fastapi import FastAPI, File, UploadFile
-from fastapi.responses import FileResponse, StreamingResponse
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse, RedirectResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 
 BASE_DIR = Path(__file__).parent
@@ -54,7 +55,23 @@ MAX_RESUME_CHARS = int(os.getenv(
     "GROQ_MAX_RESUME_CHARS" if LLM_BACKEND == "groq" else "OLLAMA_MAX_RESUME_CHARS",
     "12000" if LLM_BACKEND == "groq" else "28000"))
 
+# The frontend is no longer necessarily served by this process - it can sit on
+# its own host and call this one across origins. Every origin allowed to do that
+# is listed in ALLOWED_ORIGINS, comma separated. Empty means same-origin only,
+# which is what a local `uvicorn app:app` run wants.
+ALLOWED_ORIGINS = [o.strip().rstrip("/")
+                   for o in os.getenv("ALLOWED_ORIGINS", "").split(",") if o.strip()]
+
 app = FastAPI(title="Resume Depth")
+
+if ALLOWED_ORIGINS:
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=ALLOWED_ORIGINS,
+        allow_methods=["GET", "POST", "OPTIONS"],
+        allow_headers=["*"],
+    )
+
 app.mount("/static", StaticFiles(directory=BASE_DIR / "static"), name="static")
 
 
@@ -258,29 +275,217 @@ def ground_evidence(data: dict, resume: str) -> dict:
     return data
 
 
+DEGREE_SYNONYMS = {"bachelor", "bachelors", "b.tech", "btech", "b.e", "be", "b.s", "bs", "b.sc", "bsc", "degree"}
+
 def ground_completeness(data: dict, resume: str) -> dict:
     """The model also calls things missing that are plainly in the document.
 
-    A 'missing' item names the thing it is looking for, so take its proper nouns
-    (Outsystems, APEX, LinkedIn, CBAP) and check them against the text. If every
-    one is already there, the section is not missing and the claim is dropped.
+    A 'missing' item names the thing it is looking for. Take its proper nouns
+    and check them against the text. Also handle degree equivalences (B.Tech = Bachelor's)
+    and discard false positive claims when Education is already present.
     """
     missing = data.get("missing")
     if not isinstance(missing, list):
         return data
 
     text = resume.lower()
+    present = [str(p).lower() for p in data.get("present", [])]
+    has_education_present = any("education" in p or "degree" in p for p in present)
+    has_degree_in_text = any(d in text for d in ("b.tech", "btech", "b.e", "b.s", "b.sc", "bachelor", "degree"))
+
     kept = []
     for item in missing:
         label = str(item).strip()
         if not label:
             continue
+        label_lower = label.lower()
+
+        # If education/degree is present in resume text or 'present' list:
+        if has_education_present or has_degree_in_text:
+            if any(d in label_lower for d in ("education", "degree", "bachelor", "master")):
+                # Extract key field/topic words from missing label (e.g. artificial, intelligence, data, science)
+                words_in_label = [w for w in re.findall(r"\b[a-z]{3,}\b", label_lower)
+                                  if w not in ("education", "degree", "bachelor", "bachelors", "relevant", "field", "such", "position", "expected", "required", "with", "lack", "don't", "have")]
+                matched_words = sum(1 for w in words_in_label if w in text)
+                if not words_in_label or (len(words_in_label) > 0 and matched_words / len(words_in_label) >= 0.4):
+                    continue  # Discard false positive education/degree claim!
+
         names = re.findall(r"\b[A-Z][A-Za-z0-9+#.\-]{2,}\b", label)
-        if names and all(n.lower() in text for n in names):
-            continue                                     # provably present
+        names_to_check = [n for n in names if n.lower() not in DEGREE_SYNONYMS and n.lower() not in ("education", "relevant", "bachelor", "bachelors", "degree")]
+        if names_to_check and all(n.lower() in text for n in names_to_check):
+            continue  # provably present
+
         kept.append(label)
 
     data["missing"] = kept
+
+    # If missing items were cleaned up, adjust reasoning if it contains false degree claims
+    reasoning = data.get("reasoning", "")
+    if reasoning and ("bachelor" in reasoning.lower() or "degree" in reasoning.lower()) and has_degree_in_text:
+        # Remove sentences that falsely claim lack of degree when B.Tech/B.S is present
+        sentences = re.split(r"(?<=[.!?])\s+", reasoning)
+        cleaned_sentences = [
+            s for s in sentences
+            if not (any(d in s.lower() for d in ("bachelor", "degree", "education")) and any(neg in s.lower() for neg in ("don't have", "lack", "missing", "without", "no bachelor")))
+        ]
+        data["reasoning"] = " ".join(cleaned_sentences) if cleaned_sentences else reasoning
+
+    return data
+
+
+# Resumes are written newest-first, and an 8B model reads one top-to-bottom and
+# calls that "date order". The progression then comes back narrated backwards -
+# "you started as an Intern in Jan 2026, then became Project Head in Apr 2025".
+# Same fix as the skills above: let the model name the roles, but do the sorting
+# in Python, where a date is a date.
+
+MONTHS = {"jan": 1, "feb": 2, "mar": 3, "apr": 4, "may": 5, "jun": 6,
+          "jul": 7, "aug": 8, "sep": 9, "oct": 10, "nov": 11, "dec": 12}
+# Internships are often dated by season rather than by month.
+SEASONS = {"winter": 1, "spring": 3, "summer": 6, "fall": 9, "autumn": 9}
+PRESENT_WORDS = ("present", "current", "now", "ongoing", "to date", "today")
+
+
+def parse_when(text) -> tuple | None:
+    """A date as a resume writes it -> a sortable (year, month).
+
+    Handles 'Jan 2026', 'January 2026', '01/2026', '2026-01', 'Summer 2024',
+    a bare '2026', and ranges like 'Jan 2020 - Mar 2022' (the start date wins).
+    Returns None when there is no year to anchor on, because an undated role
+    cannot be placed on the timeline at all.
+    """
+    if not text:
+        return None
+    s = str(text).strip().lower()
+    if not re.search(r"\d{4}", s):
+        # "Present" with no year of its own belongs at the end.
+        return (9999, 12) if any(w in s for w in PRESENT_WORDS) else None
+
+    # Numeric dates first: their own separator is a hyphen, so splitting the
+    # range before reading them would leave "2026-01" looking like a bare year.
+    m = re.match(r"^(\d{4})[-/](\d{1,2})\b", s)          # 2026-01
+    if m:
+        return (int(m.group(1)), max(1, min(12, int(m.group(2)))))
+    m = re.match(r"^(\d{1,2})[-/](\d{4})\b", s)          # 01/2026
+    if m:
+        return (int(m.group(2)), max(1, min(12, int(m.group(1)))))
+
+    # A range carries two dates; a role starts at the first of them.
+    s = re.split(r"\s*(?:-|–|—|to|until|through)\s*", s)[0].strip()
+
+    year = re.search(r"\b(?:19|20)\d{2}\b", s)
+    if not year:
+        return None
+
+    month = 0                                            # year only sorts first
+    for word in re.findall(r"[a-z]+", s):
+        if word in SEASONS:
+            month = SEASONS[word]
+            break
+        if word[:3] in MONTHS:
+            month = MONTHS[word[:3]]
+            break
+    return (int(year.group(0)), month)
+
+
+# Enough to tell an Intern from a Head. Checked most-senior first, so
+# "Senior Engineering Manager" ranks as a manager rather than as a senior.
+SENIORITY = [
+    (re.compile(r"\b(chief|cto|ceo|coo|vp|vice[- ]president|founder|partner)\b"), 8),
+    (re.compile(r"\b(director|head)\b"), 7),
+    (re.compile(r"\b(principal|staff|manager)\b"), 6),
+    (re.compile(r"\b(lead|leader)\b"), 5),
+    (re.compile(r"\b(senior|sr)\b"), 4),
+    (re.compile(r"\b(associate|mid)\b"), 3),
+    (re.compile(r"\b(junior|jr|trainee|graduate|entry)\b"), 2),
+    (re.compile(r"\b(intern|internship|apprentice|volunteer)\b"), 1),
+]
+DEFAULT_RANK = 3
+
+# "Title (Jan 2026)" pairs, for models that ignore the roles array and only
+# fill in the detail line. Arrows and commas end a title, never start one.
+ROLE_IN_DETAIL = re.compile(r"([^()→>,;]+?)\s*\(([^()]*\d{4}[^()]*)\)")
+
+# A paragraph written from the wrong order cannot be trusted anywhere it
+# sequences the roles, so these are the sentences that have to go.
+CHRONO_CUES = re.compile(
+    # sentences that sequence the roles
+    r"\b(start(?:ed|ing|s)?|began|begin|then|later|earlier|after|next|however|"
+    r"followed|follows|moved|took on|went on|progress(?:ed|ion|ing)?|"
+    r"advanced|first|initially|subsequently|eventually|before"
+    # and sentences that read a verdict off that sequence
+    r"|trajector(?:y|ies)|jump(?:ed|s)?|promot(?:ion|ed)|rose|climbed)\b", re.I)
+
+
+def seniority_rank(title) -> int:
+    text = str(title or "").lower()
+    for pattern, rank in SENIORITY:
+        if pattern.search(text):
+            return rank
+    return DEFAULT_RANK
+
+
+def in_date_order(roles: list) -> bool:
+    """Dates, not titles - two spells under one title are still orderable."""
+    return all(roles[i][2] <= roles[i + 1][2] for i in range(len(roles) - 1))
+
+
+def roles_from_detail(data: dict) -> list:
+    """The "Title (Jan 2026)" pairs written into the detail line."""
+    return [(title.strip(" -→\t"), when.strip(), parse_when(when))
+            for title, when in ROLE_IN_DETAIL.findall(str(data.get("detail") or ""))]
+
+
+def collect_roles(data: dict) -> list:
+    """Every role the model named, as (title, date-as-written, sort key)."""
+    roles = []
+    for item in data.get("roles") or []:
+        if not isinstance(item, dict):
+            continue
+        title = str(item.get("title") or "").strip()
+        when = str(item.get("start") or item.get("date") or "").strip()
+        if title:
+            roles.append((title, when, parse_when(when)))
+
+    if len(roles) < 2:      # the model skipped the array - read the detail line
+        roles = roles_from_detail(data)
+    return roles
+
+
+def ground_growth(data: dict, resume: str) -> dict:
+    """Put the roles back in date order when the model got the order wrong.
+
+    There are two mistakes here and the model makes them independently: it will
+    sort the roles correctly and still print the detail line newest-first. So a
+    wrong detail line only rewrites the detail line. The narrative is rebuilt
+    only when the roles themselves came back out of order, because that is the
+    case where the model actually believed the wrong chronology.
+
+    Undated roles are left out - there is nowhere to put them. Where the model
+    had the order right its judgement stands, since it read the whole resume
+    and this function has only titles to go on.
+    """
+    dated = [r for r in collect_roles(data) if r[2]]
+    if len(dated) < 2:
+        return data
+    ordered = sorted(dated, key=lambda role: role[2])
+
+    roles_wrong = not in_date_order(dated)
+    shown = [r for r in roles_from_detail(data) if r[2]]
+    if roles_wrong or (len(shown) > 1 and not in_date_order(shown)):
+        data["detail"] = " → ".join(f"{title} ({when})" for title, when, _ in ordered)
+    if not roles_wrong:
+        return data
+
+    ranks = [seniority_rank(title) for title, _, _ in ordered]
+    data["trajectory"] = ("rising" if ranks[-1] > ranks[0] else
+                          "declining" if ranks[-1] < ranks[0] else "steady")
+
+    corrected = ("In date order, your roles run "
+                 + " then ".join(f"{title} ({when})" for title, when, _ in ordered) + ".")
+    kept = [s for s in re.split(r"(?<=[.!?])\s+", str(data.get("reasoning") or "").strip())
+            if s and not CHRONO_CUES.search(s)]
+    data["reasoning"] = " ".join([corrected] + kept)
     return data
 
 
@@ -386,8 +591,11 @@ RESUME:
 {resume}
 
 Rules:
-- Put the roles in date order and look at the titles. Rising titles
-  (Intern -> Junior -> Senior -> Lead) score high.
+- Resumes are written newest-first. The order the jobs appear in the document is
+  NOT date order. Read each start date, sort the roles oldest-first yourself, and
+  judge that order - never the order you read them in.
+- Then look at the titles. Rising titles (Intern -> Junior -> Senior -> Lead)
+  score high.
 - Growth also counts without a promotion: bigger scope, harder systems, leading
   people, owning more of the product over time.
 - The same title with the same responsibilities for many years scores low.
@@ -395,13 +603,18 @@ Rules:
 
 Reply with JSON:
 {{"score": <0-100>,
+  "roles": [{{"title": "<job title>",
+             "start": "<its start date, exactly as the resume writes it>"}}],
   "verdict": "<one sentence addressed to the candidate>",
   "detail": "<one short sentence naming the progression you saw, e.g. 'Junior Dev (2019) -> Senior Dev (2023)'>",
   "reasoning": "<3-4 sentences. Walk the roles in date order with their titles and
     years. Say where scope or responsibility widened, and where it plateaued. If
     the career is short, say so plainly instead of punishing it. Address the
     candidate as 'you'.>",
-  "trajectory": "<rising|steady|flat|unclear>"}}""",
+  "trajectory": "<rising|steady|flat|unclear>"}}
+
+List "roles" oldest-first, one entry per job, and walk them in that same order in
+"detail" and "reasoning".""",
     },
     {
         "key": "completeness",
@@ -416,9 +629,10 @@ Sections this role is expected to have: {expected_sections}
 RESUME:
 {resume}
 
-Also always check the universals: contact details, professional summary, skills
-list, work experience with dates, education. Certifications and links (GitHub /
-portfolio / LinkedIn) count when the role expects them.
+Rules for evaluation:
+- Universals to check: contact details, professional summary, skills list, work experience with dates, education.
+- Degree Equivalence: B.Tech, B.E., B.S., B.Sc., M.Tech, M.S. are valid degrees. If the candidate has "B.Tech in Artificial Intelligence and Data Science", they DO have a Bachelor's degree in AI & Data Science. Never say their degree is missing!
+- Do NOT list Education or a degree as missing if an Education section with a relevant degree exists in the resume.
 
 Score = share of expected parts that are present and usable.
 
@@ -485,6 +699,30 @@ async def preflight(client: httpx.AsyncClient) -> str:
     return ""
 
 
+# A single check can run for minutes, and nothing is sent while it does. Once the
+# browser is on another host the stream crosses proxies that cut a connection
+# that has gone quiet, so fill the gaps. A comment line is valid SSE that no
+# client turns into an event.
+HEARTBEAT_SECONDS = 15
+KEEPALIVE = ": keepalive\n\n"
+
+
+async def pending(coro):
+    """Run a coroutine, yielding a keepalive for every quiet interval.
+
+    Yields KEEPALIVE strings while it waits and the finished Task last, so the
+    caller both keeps the stream warm and gets the result (or the exception)
+    without this having to know what either looks like.
+    """
+    task = asyncio.create_task(coro)
+    while True:
+        done, _ = await asyncio.wait({task}, timeout=HEARTBEAT_SECONDS)
+        if done:
+            break
+        yield KEEPALIVE
+    yield task
+
+
 async def run_analysis(resume: str):
     async with httpx.AsyncClient() as client:
         problem = await preflight(client)
@@ -493,8 +731,12 @@ async def run_analysis(resume: str):
             return
 
         yield sse("step", {"message": "Reading the resume..."})
+        async for beat in pending(
+                ask_llm(client, SYSTEM, ROLE_PROMPT.format(resume=resume))):
+            if isinstance(beat, str):
+                yield beat
         try:
-            role_info = await ask_llm(client, SYSTEM, ROLE_PROMPT.format(resume=resume))
+            role_info = beat.result()
         except Exception as exc:
             yield sse("error", {"message": f"Model call failed: {exc}"})
             return
@@ -521,6 +763,8 @@ async def run_analysis(resume: str):
                 data = ground_evidence(data, resume)
             elif check["key"] == "completeness":
                 data = ground_completeness(data, resume)
+            elif check["key"] == "growth":
+                data = ground_growth(data, resume)
             score = clamp_score(data.get("score"))
             return {
                 "key": check["key"],
@@ -540,8 +784,11 @@ async def run_analysis(resume: str):
         # queue until its read timeout fires.
         scored = []
         for check in CHECKS:
+            async for beat in pending(run_check(check)):
+                if isinstance(beat, str):
+                    yield beat
             try:
-                result = await run_check(check)
+                result = beat.result()
                 scored.append(result)
             except Exception as exc:
                 result = {
@@ -564,9 +811,12 @@ async def run_analysis(resume: str):
         overall = round(sum(r["score"] for r in scored) / len(scored))
 
         summary = "\n".join(f"- {r['title']}: {r['score']}/100 - {r['verdict']}" for r in scored)
+        async for beat in pending(ask_llm(client, SYSTEM, ACTION_PROMPT.format(
+                role=role, seniority=seniority, summary=summary), 400)):
+            if isinstance(beat, str):
+                yield beat
         try:
-            action = (await ask_llm(client, SYSTEM, ACTION_PROMPT.format(
-                role=role, seniority=seniority, summary=summary), 400)).get("action", "")
+            action = beat.result().get("action", "")
         except Exception:
             action = ""
 
@@ -600,4 +850,7 @@ async def backend():
 
 @app.get("/")
 async def index():
-    return FileResponse(BASE_DIR / "static" / "index.html")
+    # index.html links its assets relatively so the same file can be dropped on a
+    # static host. Serving it from / would resolve those against /, so hand the
+    # browser the /static/ copy instead of the file.
+    return RedirectResponse("/static/index.html")

@@ -1,0 +1,23 @@
+services:
+  - type: web
+    name: resume-depth-api
+    runtime: python
+    plan: starter
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn app:app --host 0.0.0.0 --port $PORT
+    healthCheckPath: /api/backend
+    envVars:
+      # Ollama cannot follow the app onto Render, so the hosted backend is Groq.
+      - key: LLM_BACKEND
+        value: groq
+      - key: GROQ_MODEL
+        value: openai/gpt-oss-120b
+      - key: GROQ_MAX_RESUME_CHARS
+        value: "12000"
+      # The origins allowed to call this API from a browser. Comma separated,
+      # scheme included, no trailing slash.
+      - key: ALLOWED_ORIGINS
+        value: http://apptwo.gorecruitai.com,https://apptwo.gorecruitai.com
+      # Set in the Render dashboard, never committed.
+      - key: GROQ_API_KEY
+        sync: false

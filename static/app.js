@@ -1,6 +1,11 @@
 /* Resume Depth — frontend logic. SSE contract, event names and payload shapes
    are unchanged from the backend (app.py): step, role, check, done, error. */
 
+/* Where the FastAPI backend lives. config.js sets window.API_BASE when the page
+   is hosted apart from the API; left unset it stays empty and every call is
+   same-origin, which is what `uvicorn app:app` serves locally. */
+const API = String(window.API_BASE || "").replace(/\/+$/, "");
+
 const $ = (id) => document.getElementById(id);
 const ORDER = ["experience", "evidence", "growth", "completeness"];
 
@@ -29,6 +34,17 @@ const TONE = {
   warn: { cls: "needs", label: "Needs work", icon: "ph-warning-circle", color: "var(--needs)", tint: "var(--needs-t)", border: "var(--needs-b)" },
   fail: { cls: "weak", label: "Weak", icon: "ph-x-circle", color: "var(--weak)", tint: "var(--weak-t)", border: "var(--weak-b)" },
   error: { cls: "neutral", label: "Skipped", icon: "ph-minus-circle", color: "var(--faint)", tint: "var(--paper-2)", border: "var(--line)" },
+};
+
+// A backwards timeline used to come back tagged "rising" under a trend-up
+// arrow. ground_growth() can now return "declining", so the icon has to follow
+// the word rather than always pointing up.
+const TRAJECTORY_ICON = {
+  rising: "ph-trend-up",
+  declining: "ph-trend-down",
+  steady: "ph-arrow-right",
+  flat: "ph-arrow-right",
+  unclear: "ph-question",
 };
 
 const STRENGTH = {
@@ -65,7 +81,7 @@ if (document.fonts && document.fonts.ready) document.fonts.ready.then(syncSticky
 const CIRC = 2 * Math.PI * 59;
 
 /* ---------------- backend banner ---------------- */
-fetch("/api/backend").then((r) => r.json()).then((b) => {
+fetch(API + "/api/backend").then((r) => r.json()).then((b) => {
   $("backendNote").innerHTML = b.local
     ? `Analysed locally by <strong>${esc(b.model)}</strong> &mdash; nothing leaves this machine.`
     : `Analysed by <strong>${esc(b.model)}</strong> on <strong>${esc(b.host)}</strong> &mdash; your resume is sent there and is not stored after the report is generated.`;
@@ -211,7 +227,7 @@ function fillRow(c) {
 
   const tagChips = [
     x.total_years ? tagChip("ph-clock", x.total_years) : "",
-    x.trajectory ? tagChip("ph-trend-up", x.trajectory) : "",
+    x.trajectory ? tagChip(TRAJECTORY_ICON[String(x.trajectory).toLowerCase()] || "ph-trend-up", x.trajectory) : "",
   ].join("");
 
   const drawerId = "drawer-" + k;
@@ -382,7 +398,7 @@ async function analyse(file) {
 
   let res;
   try {
-    res = await fetch("/api/analyze", { method: "POST", body });
+    res = await fetch(API + "/api/analyze", { method: "POST", body });
   } catch {
     return fail("Could not reach the server. Is <code>uvicorn app:app</code> still running?");
   }
