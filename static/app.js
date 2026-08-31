@@ -101,7 +101,11 @@ drop.ondrop = (e) => {
   if (e.dataTransfer.files[0]) analyse(e.dataTransfer.files[0]);
 };
 $("file").onchange = (e) => { if (e.target.files[0]) analyse(e.target.files[0]); };
-$("btnSelect").onclick = (e) => e.stopPropagation();
+// The button sits inside the dropzone, so it has to open the picker itself and
+// then stop the click reaching the dropzone - otherwise the two handlers fire
+// in turn and the dialog opens twice. Swallowing the click without opening
+// anything is what made the button look dead while the box around it worked.
+$("btnSelect").onclick = (e) => { e.stopPropagation(); $("file").click(); };
 
 $("btnNew").onclick = () => location.reload();
 $("btnNew2").onclick = () => location.reload();
