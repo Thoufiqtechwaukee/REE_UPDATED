@@ -289,7 +289,9 @@ def ground_completeness(data: dict, resume: str) -> dict:
         return data
 
     text = resume.lower()
-    present = [str(p).lower() for p in data.get("present", [])]
+    # An explicit "present": null reaches here as None, which .get's default
+    # never covers - and an exception in a check costs the whole card.
+    present = [str(p).lower() for p in (data.get("present") or [])]
     has_education_present = any("education" in p or "degree" in p for p in present)
     has_degree_in_text = any(d in text for d in ("b.tech", "btech", "b.e", "b.s", "b.sc", "bachelor", "degree"))
 
@@ -318,6 +320,20 @@ def ground_completeness(data: dict, resume: str) -> dict:
         kept.append(label)
 
     data["missing"] = kept
+
+    # The model picked its score believing those items were absent, so removing
+    # them without touching the number leaves the card contradicting itself: a
+    # 70 sitting above a list that reads 80. Recompute from what survived - but
+    # only when something was actually removed. With nothing removed the model's
+    # number stands, because it weighs a missing summary against a missing
+    # portfolio in a way this ratio cannot, and because a model that returns a
+    # short "missing" list would otherwise be handed a free 100.
+    removed = len(missing) - len(kept)
+    total = len(kept) + len(data.get("present") or [])
+    if removed and total:
+        found = total - len(kept)
+        data["score"] = round(100 * found / total)
+        data["detail"] = f"{found} of {total} expected sections present"
 
     # If missing items were cleaned up, adjust reasoning if it contains false degree claims
     reasoning = data.get("reasoning", "")
