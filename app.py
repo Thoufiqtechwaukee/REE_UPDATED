@@ -388,41 +388,9 @@ def parse_when(text) -> tuple | None:
     return (int(year.group(0)), month)
 
 
-# Enough to tell an Intern from a Head. Checked most-senior first, so
-# "Senior Engineering Manager" ranks as a manager rather than as a senior.
-SENIORITY = [
-    (re.compile(r"\b(chief|cto|ceo|coo|vp|vice[- ]president|founder|partner)\b"), 8),
-    (re.compile(r"\b(director|head)\b"), 7),
-    (re.compile(r"\b(principal|staff|manager)\b"), 6),
-    (re.compile(r"\b(lead|leader)\b"), 5),
-    (re.compile(r"\b(senior|sr)\b"), 4),
-    (re.compile(r"\b(associate|mid)\b"), 3),
-    (re.compile(r"\b(junior|jr|trainee|graduate|entry)\b"), 2),
-    (re.compile(r"\b(intern|internship|apprentice|volunteer)\b"), 1),
-]
-DEFAULT_RANK = 3
-
 # "Title (Jan 2026)" pairs, for models that ignore the roles array and only
 # fill in the detail line. Arrows and commas end a title, never start one.
 ROLE_IN_DETAIL = re.compile(r"([^()→>,;]+?)\s*\(([^()]*\d{4}[^()]*)\)")
-
-# A paragraph written from the wrong order cannot be trusted anywhere it
-# sequences the roles, so these are the sentences that have to go.
-CHRONO_CUES = re.compile(
-    # sentences that sequence the roles
-    r"\b(start(?:ed|ing|s)?|began|begin|then|later|earlier|after|next|however|"
-    r"followed|follows|moved|took on|went on|progress(?:ed|ion|ing)?|"
-    r"advanced|first|initially|subsequently|eventually|before"
-    # and sentences that read a verdict off that sequence
-    r"|trajector(?:y|ies)|jump(?:ed|s)?|promot(?:ion|ed)|rose|climbed)\b", re.I)
-
-
-def seniority_rank(title) -> int:
-    text = str(title or "").lower()
-    for pattern, rank in SENIORITY:
-        if pattern.search(text):
-            return rank
-    return DEFAULT_RANK
 
 
 def in_date_order(roles: list) -> bool:
@@ -453,39 +421,25 @@ def collect_roles(data: dict) -> list:
 
 
 def ground_growth(data: dict, resume: str) -> dict:
-    """Put the roles back in date order when the model got the order wrong.
+    """Put the roles on the detail line back in date order.
 
-    There are two mistakes here and the model makes them independently: it will
-    sort the roles correctly and still print the detail line newest-first. So a
-    wrong detail line only rewrites the detail line. The narrative is rebuilt
-    only when the roles themselves came back out of order, because that is the
-    case where the model actually believed the wrong chronology.
+    This touches the one-line summary and nothing else. The verdict, the
+    reasoning and the trajectory are the model's read of the career and stay
+    exactly as written - it saw what the person actually did, which is the part
+    worth having. Sorting a list is the only thing here that Python does better.
 
-    Undated roles are left out - there is nowhere to put them. Where the model
-    had the order right its judgement stands, since it read the whole resume
-    and this function has only titles to go on.
+    Undated roles are dropped: there is nowhere to put them on a timeline.
     """
     dated = [r for r in collect_roles(data) if r[2]]
     if len(dated) < 2:
         return data
-    ordered = sorted(dated, key=lambda role: role[2])
 
-    roles_wrong = not in_date_order(dated)
     shown = [r for r in roles_from_detail(data) if r[2]]
-    if roles_wrong or (len(shown) > 1 and not in_date_order(shown)):
-        data["detail"] = " → ".join(f"{title} ({when})" for title, when, _ in ordered)
-    if not roles_wrong:
-        return data
+    if in_date_order(dated) and (len(shown) < 2 or in_date_order(shown)):
+        return data                       # already chronological, leave it alone
 
-    ranks = [seniority_rank(title) for title, _, _ in ordered]
-    data["trajectory"] = ("rising" if ranks[-1] > ranks[0] else
-                          "declining" if ranks[-1] < ranks[0] else "steady")
-
-    corrected = ("In date order, your roles run "
-                 + " then ".join(f"{title} ({when})" for title, when, _ in ordered) + ".")
-    kept = [s for s in re.split(r"(?<=[.!?])\s+", str(data.get("reasoning") or "").strip())
-            if s and not CHRONO_CUES.search(s)]
-    data["reasoning"] = " ".join([corrected] + kept)
+    ordered = sorted(dated, key=lambda role: role[2])
+    data["detail"] = " → ".join(f"{title} ({when})" for title, when, _ in ordered)
     return data
 
 
@@ -583,38 +537,31 @@ Include every skill you found, up to 20.""",
         "title": "Growth",
         "why": "Do the job titles rise over time? Junior to Senior to Lead shows someone "
                "trusted with more. A flat line for eight years does not.",
-        "prompt": """Judge CAREER GROWTH across the jobs in this resume.
+        "prompt": """How has this candidate GROWN over the course of their career?
 
 Detected role: {role} ({seniority})
 
 RESUME:
 {resume}
 
-Rules:
-- Resumes are written newest-first. The order the jobs appear in the document is
-  NOT date order. Read each start date, sort the roles oldest-first yourself, and
-  judge that order - never the order you read them in.
-- Then look at the titles. Rising titles (Intern -> Junior -> Senior -> Lead)
-  score high.
-- Growth also counts without a promotion: bigger scope, harder systems, leading
-  people, owning more of the product over time.
-- The same title with the same responsibilities for many years scores low.
-- Only one job so far: judge growth INSIDE that job, and do not punish a short career.
+Resumes are written newest-first, so read the dates rather than the page order.
+Judge what actually changed from the earliest position to the latest: the work
+they were trusted with, the scope they owned, the difficulty of what they built.
+Whatever shape this particular career has, judge growth on its own terms - a run
+of internships, a switch of field, one long job and a person who has only ever
+been promoted are four different stories, and each has its own kind of progress.
 
 Reply with JSON:
 {{"score": <0-100>,
-  "roles": [{{"title": "<job title>",
+  "roles": [{{"title": "<the position held - a job, not a project>",
              "start": "<its start date, exactly as the resume writes it>"}}],
-  "verdict": "<one sentence addressed to the candidate>",
-  "detail": "<one short sentence naming the progression you saw, e.g. 'Junior Dev (2019) -> Senior Dev (2023)'>",
-  "reasoning": "<3-4 sentences. Walk the roles in date order with their titles and
-    years. Say where scope or responsibility widened, and where it plateaued. If
-    the career is short, say so plainly instead of punishing it. Address the
+  "verdict": "<one sentence to the candidate on how their career has developed>",
+  "detail": "<the progression in a few words, e.g. 'Junior Dev (2019) -> Senior Dev (2023)'>",
+  "reasoning": "<3-4 sentences on how they grew and what tells you so - what they
+    were doing early on, what they are trusted with now, and what that says about
+    them. Point at the evidence rather than restating the timeline. Address the
     candidate as 'you'.>",
-  "trajectory": "<rising|steady|flat|unclear>"}}
-
-List "roles" oldest-first, one entry per job, and walk them in that same order in
-"detail" and "reasoning".""",
+  "trajectory": "<rising|steady|flat|unclear>"}}""",
     },
     {
         "key": "completeness",
