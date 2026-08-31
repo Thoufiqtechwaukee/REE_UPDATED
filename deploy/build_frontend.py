@@ -28,11 +28,12 @@ window.API_BASE = "{api_base}";
 
 
 def main() -> int:
-    if len(sys.argv) != 2:
+    args = [a for a in sys.argv[1:] if not a.startswith("--")]
+    if len(args) != 1:
         print(__doc__)
         return 2
 
-    api_base = sys.argv[1].strip().rstrip("/")
+    api_base = args[0].strip().rstrip("/")
     if not api_base.startswith(("http://", "https://")):
         print(f"error: API base must start with http:// or https:// - got {api_base!r}")
         return 2
@@ -46,9 +47,16 @@ def main() -> int:
 
     for name in ASSETS:
         shutil.copy2(STATIC_DIR / name, DIST_DIR / name)
-    shutil.copy2(DEPLOY_DIR / "web.config", DIST_DIR / "web.config")
     (DIST_DIR / "config.js").write_text(
         CONFIG_TEMPLATE.format(api_base=api_base), encoding="utf-8")
+
+    # web.config is deliberately NOT shipped by default. apptwo.gorecruitai.com
+    # already has one carrying a rewrite rule that keeps /api routed to the
+    # ASP.NET application beside this page; overwriting it would drop that for
+    # nothing, since this page needs no routing of its own. Pass --with-web-config
+    # only when putting the page on a host that has none.
+    if "--with-web-config" in sys.argv:
+        shutil.copy2(DEPLOY_DIR / "web.config", DIST_DIR / "web.config")
 
     print(f"built {DIST_DIR} against {api_base}")
     for path in sorted(DIST_DIR.iterdir()):
