@@ -586,6 +586,32 @@ a { color: var(--blue); }
 .section-list.present .list-label { color: var(--strong); }
 .section-list.absent .list-label { color: var(--weak); }
 
+/* ---- positions found (Experience) & the role line (Growth) ---- */
+.roles-wrap { overflow-x: auto; }
+.roles-tbl { width: 100%; border-collapse: collapse; font-size: var(--fs-13); }
+.roles-tbl td {
+  padding: var(--sp-3) var(--sp-3) var(--sp-3) 0;
+  border-bottom: 1px solid var(--line-s);
+  vertical-align: top;
+}
+.roles-tbl tr:last-child td { border-bottom: none; }
+.role-cell { min-width: 190px; }
+.role-name { display: block; font-weight: 600; color: var(--ink); }
+.role-emp { display: block; font-size: var(--fs-12); color: var(--faint); margin-top: 2px; }
+.role-dates { white-space: nowrap; color: var(--ink-2); }
+.role-len { white-space: nowrap; color: var(--ink-2); font-variant-numeric: tabular-nums; }
+.roles-tbl td:last-child { text-align: right; white-space: nowrap; }
+.roles-note { font-size: var(--fs-12); color: var(--faint); margin: var(--sp-3) 0 0; }
+
+.role-line { list-style: none; margin: 0; padding: 0; display: flex; flex-wrap: wrap; gap: var(--sp-2); }
+.role-line li {
+  display: inline-flex; align-items: baseline; gap: var(--sp-2);
+  border: 1px solid var(--line); border-radius: 999px;
+  padding: 4px var(--sp-3); background: var(--paper-2);
+}
+.role-line .role-name { display: inline; font-weight: 600; font-size: var(--fs-13); }
+.role-line .role-year { font-size: var(--fs-12); color: var(--faint); font-variant-numeric: tabular-nums; }
+
 .status-icon { font-size: var(--fs-24); opacity: 0; transition: opacity var(--dur-fast) ease; }
 .status-icon.show { opacity: 1; }
 .status-icon.strong { color: var(--strong); }
@@ -677,4 +703,7 @@ body.app { min-height: 100vh; display: flex; flex-direction: column; }
   body { background: #fff; }
   .drawer { grid-template-rows: 1fr !important; }
   .row { opacity: 1 !important; transform: none !important; }
+  /* a position must not be split across a page break in the exported PDF */
+  .roles-tbl tr { break-inside: avoid; }
+  .roles-wrap { overflow-x: visible; }
 }

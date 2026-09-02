@@ -229,12 +229,21 @@ function fillRow(c) {
     <div class="card-score"><span class="n num" id="sc-${k}">0</span><span class="d">/100</span></div>
     <i class="ph-bold status-icon" aria-hidden="true"></i>`;
 
+  // Two tenures, kept apart: time employed to do the job, and time interning.
+  // Both are counted in Python from the dated positions - projects excluded.
+  const interned = x.internship_years && x.internship_years !== "none";
   const tagChips = [
-    x.total_years ? tagChip("ph-clock", x.total_years) : "",
+    x.total_years ? tagChip("ph-briefcase", `${x.total_years} employed`) : "",
+    interned ? tagChip("ph-student", `${x.internship_years} interning`) : "",
     x.trajectory ? tagChip(TRAJECTORY_ICON[String(x.trajectory).toLowerCase()] || "ph-trend-up", x.trajectory) : "",
   ].join("");
 
   const drawerId = "drawer-" + k;
+  // The positions sit on the face of the card, not inside the drawer: how long
+  // someone has actually been employed is the answer, not the footnote.
+  const rolesBlock = k === "experience" ? positions(x.roles, false)
+                   : k === "growth" ? positions(x.roles, true) : "";
+
   const hasBreakdown = !!(x.skills || x.present || x.missing);
   const hasDrawer = !!(c.reasoning || hasBreakdown);
 
@@ -242,6 +251,7 @@ function fillRow(c) {
     <p class="matters">${META[k].why}</p>
     <div class="quote-block">${failed ? esc(c.verdict) : `&ldquo;${esc(c.verdict)}&rdquo;`}</div>
     <div class="found-line"><p>${esc(c.detail)}</p>${tagChips}</div>
+    ${rolesBlock}
     ${hasDrawer ? `
       <div class="divider">
         <button class="toggle" id="tg-${k}" type="button" aria-expanded="false" aria-controls="${drawerId}">
@@ -284,7 +294,58 @@ function tagChip(icon, text) {
   return `<span class="tag-chip"><i class="ph ${icon}" aria-hidden="true"></i>${esc(text)}</span>`;
 }
 
+/* Months -> "1 yr 4 mo". Bare months for a short stint, because "0.3 years"
+   tells a reader nothing about a four-month placement. */
+function saySpan(months) {
+  if (!months) return "";
+  const y = Math.floor(months / 12), m = months % 12;
+  if (!y) return `${m} mo`;
+  return m ? `${y} yr ${m} mo` : `${y} yr`;
+}
+
+/* The positions Experience found, oldest first. Experience shows the full
+   table; Growth shows the same careers as a plain title-and-year line, which
+   is all that check is arguing about. */
+function positions(roles, compact) {
+  if (!Array.isArray(roles) || !roles.length) return "";
+
+  if (compact) {
+    const line = roles.map((r) => {
+      const year = (String(r.start || "").match(/(19|20)\d{2}/) || [])[0];
+      return `<li><span class="role-name">${esc(r.title)}</span>${
+        year ? `<span class="role-year">${year}</span>` : ""}</li>`;
+    }).join("");
+    return `<div class="section-list">
+        <span class="list-label">Roles in date order</span>
+        <ol class="role-line">${line}</ol>
+      </div>`;
+  }
+
+  const rows = roles.map((r) => {
+    const intern = r.type === "internship";
+    const dates = [r.start, r.end].filter(Boolean).join(" – ") || "no dates given";
+    return `<tr>
+      <td class="role-cell">
+        <span class="role-name">${esc(r.title)}</span>
+        ${r.employer ? `<span class="role-emp">${esc(r.employer)}</span>` : ""}
+      </td>
+      <td class="role-dates">${esc(dates)}</td>
+      <td class="role-len">${saySpan(r.months) || "&mdash;"}</td>
+      <td><span class="chip ${intern ? "chip-mentioned" : "chip-present"}">${
+        intern ? "Internship" : "Employed"}</span></td>
+    </tr>`;
+  }).join("");
+
+  return `<div class="section-list">
+      <span class="list-label">Positions found in this resume</span>
+      <div class="roles-wrap"><table class="roles-tbl"><tbody>${rows}</tbody></table></div>
+      <p class="roles-note">Tenure is counted from these dates only. Personal
+        projects and coursework are not counted as experience.</p>
+    </div>`;
+}
+
 function breakdown(key, x) {
+
   if (key === "evidence" && Array.isArray(x.skills) && x.skills.length) {
     const rank = { strong: 0, moderate: 1, claimed: 2 };
     const skills = x.skills.slice().sort((a, b) => rank[a.strength] - rank[b.strength]);

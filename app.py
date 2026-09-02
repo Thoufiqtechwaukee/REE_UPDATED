@@ -17,6 +17,7 @@ import io
 import json
 import os
 import re
+from datetime import datetime
 from pathlib import Path
 
 import httpx
@@ -32,7 +33,12 @@ load_dotenv(BASE_DIR / ".env")
 # "groq" = hosted and fast; "ollama" = local and private. See .env.
 LLM_BACKEND = os.getenv("LLM_BACKEND", "ollama").strip().lower()
 
-OLLAMA_URL = os.getenv("OLLAMA_URL", "http://localhost:11434").rstrip("/")
+# RunPod's console shows the pod's OpenAI-compatible URL, which ends in /v1, and
+# pasting that straight in takes the whole app down: every call here goes to the
+# native API at /api/chat (the /v1 layer cannot set num_ctx), so the suffix turns
+# each one into /v1/api/chat and a 404. Strip it rather than fail on it.
+OLLAMA_URL = re.sub(r"/v1/?$", "",
+                    os.getenv("OLLAMA_URL", "http://localhost:11434").strip()).rstrip("/")
 OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "llama3.1:8b")
 
 GROQ_URL = os.getenv("GROQ_URL", "https://api.groq.com/openai/v1").rstrip("/")
@@ -515,6 +521,132 @@ def ground_growth(data: dict, resume: str) -> dict:
     return data
 
 
+# Tenure is counted here, not by the model. Asked for "total_years" it returns an
+# impression - and it counts side projects and coursework as experience, which is
+# exactly what a recruiter does not want. Employment is a set of dated intervals;
+# adding them up is arithmetic.
+
+INTERNSHIP_WORDS = re.compile(
+    r"\b(intern|internship|trainee|apprentice|co-?op|industrial training|"
+    r"summer (?:analyst|associate)|student)\b", re.I)
+
+MONTHS_PER_YEAR = 12.0
+
+
+def month_index(when: tuple) -> int:
+    """(year, month) -> a single number, so intervals can be compared."""
+    year, month = when
+    return year * 12 + max(1, month) - 1
+
+
+def parse_end(text, started: tuple | None) -> tuple | None:
+    """The end of a spell. 'Present' means now; a range means its second date."""
+    if not text:
+        return None
+    body = str(text).strip().lower()
+    if any(word in body for word in PRESENT_WORDS):
+        today = datetime.now()
+        return (today.year, today.month)
+    # "Jan 2020 - Mar 2022" hands us the whole range; the end is what follows.
+    parts = re.split(r"\s*(?:-|\u2013|\u2014|to|until|through)\s*", body)
+    when = parse_when(parts[-1] if len(parts) > 1 else body)
+    if when == (9999, 12):                       # an open-ended spell runs to now
+        today = datetime.now()
+        return (today.year, today.month)
+    return when
+
+
+def merge_months(spans: list) -> int:
+    """Total months covered by these spans, counting overlap only once.
+
+    Two jobs held at the same time are one stretch of a career, not two - a
+    naive sum would hand someone eight years for four years of moonlighting.
+    """
+    if not spans:
+        return 0
+    total, current_start, current_end = 0, *spans[0]
+    for start, end in sorted(spans)[1:]:
+        if start <= current_end:                 # overlapping or touching
+            current_end = max(current_end, end)
+        else:
+            total += current_end - current_start
+            current_start, current_end = start, end
+    return total + current_end - current_start
+
+
+def say_duration(months: int) -> str:
+    if months <= 0:
+        return "none"
+    if months < 12:
+        return f"{months} month{'s' if months != 1 else ''}"
+    years = months / MONTHS_PER_YEAR
+    return f"{years:.1f} years".replace(".0 years", " years")
+
+
+def collect_positions(data: dict) -> list:
+    """The jobs the model listed, dated and classified. Projects never reach here."""
+    positions = []
+    for item in data.get("roles") or []:
+        if not isinstance(item, dict):
+            continue
+        title = str(item.get("title") or "").strip()
+        if not title:
+            continue
+        employer = str(item.get("employer") or "").strip()
+        start_raw = str(item.get("start") or "").strip()
+        end_raw = str(item.get("end") or "").strip()
+
+        started = parse_when(start_raw)
+        ended = parse_end(end_raw, started) if end_raw else None
+        if started and started == (9999, 12):    # a start of "Present" is nonsense
+            started = None
+
+        # Trust the model's label, but a title that plainly says intern wins.
+        kind = str(item.get("type") or "").strip().lower()
+        if INTERNSHIP_WORDS.search(f"{title} {employer}"):
+            kind = "internship"
+        elif kind not in ("work", "internship"):
+            kind = "work"
+
+        months = 0
+        if started and ended and month_index(ended) > month_index(started):
+            months = month_index(ended) - month_index(started)
+
+        positions.append({
+            "title": title,
+            "employer": employer,
+            "start": start_raw,
+            "end": end_raw or ("Present" if started and not end_raw else ""),
+            "type": kind,
+            "months": months,
+            "_span": (month_index(started), month_index(ended))
+            if started and ended and month_index(ended) > month_index(started) else None,
+        })
+
+    positions.sort(key=lambda p: p["_span"][0] if p["_span"] else 10 ** 9)
+    return positions
+
+
+def ground_experience(data: dict, resume: str) -> dict:
+    """Count tenure from the dated positions, split work from internships.
+
+    Projects are excluded because the prompt asks only for positions, and the
+    two totals are kept apart because six months of interning is not six months
+    of being employed to do the job.
+    """
+    positions = collect_positions(data)
+    if not positions:
+        return data
+
+    work = [p["_span"] for p in positions if p["type"] == "work" and p["_span"]]
+    intern = [p["_span"] for p in positions if p["type"] == "internship" and p["_span"]]
+
+    work_months, intern_months = merge_months(work), merge_months(intern)
+    data["total_years"] = say_duration(work_months) if work_months else "no dated roles"
+    data["internship_years"] = say_duration(intern_months)
+    data["roles"] = [{k: v for k, v in p.items() if k != "_span"} for p in positions]
+    return data
+
 # --------------------------------------------------------------------------
 # 3. The four checks
 # --------------------------------------------------------------------------
@@ -568,7 +700,17 @@ Reply with JSON:
   "reasoning": "<3-4 sentences. Name the actual employers, projects and dates you
     read. Say what the work shows about their depth, and what specifically held the
     score back. Address the candidate as 'you'. Quote real phrases from the resume.>",
-  "total_years": "<e.g. '4.5 years' or 'unclear'>"}}""",
+  "roles": [{{"title": "<job title>",
+             "employer": "<company or organisation>",
+             "start": "<start date exactly as the resume writes it>",
+             "end": "<end date as written, or Present>",
+             "type": "<work|internship>"}}]}}
+
+"roles" is every POSITION held, oldest first - a job someone employed them to do.
+Internships, trainee and co-op placements are positions too; mark those
+"internship". Personal projects, college coursework, hackathons and portfolio
+sites are NOT positions and must not appear, however impressive. Copy the dates
+exactly as written; leave a date empty rather than inventing one.""",
     },
     {
         "key": "evidence",
@@ -774,15 +916,26 @@ async def run_analysis(resume: str):
 
         yield sse("step", {"message": f"Scoring against a {role} profile..."})
 
+        # The positions Experience settles on, shared with Growth below.
+        timeline = []
+
         async def run_check(check):
             # the skills array on a long CV is the one reply that can run long
             budget = 3000 if check["key"] == "evidence" else 1800
             data = await ask_llm(client, SYSTEM, check["prompt"].format(**ctx), budget)
-            if check["key"] == "evidence":
+            if check["key"] == "experience":
+                data = ground_experience(data, resume)
+                timeline[:] = data.get("roles") or []
+            elif check["key"] == "evidence":
                 data = ground_evidence(data, resume)
             elif check["key"] == "completeness":
                 data = ground_completeness(data, resume)
             elif check["key"] == "growth":
+                # Experience already worked the positions out and threw the
+                # projects away. Growth showing a different list of the same
+                # career is just two chances to be wrong, so it reuses that one.
+                if timeline:
+                    data["roles"] = [dict(role) for role in timeline]
                 data = ground_growth(data, resume)
             score = clamp_score(data.get("score"))
             return {
@@ -795,7 +948,8 @@ async def run_analysis(resume: str):
                 "detail": data.get("detail") or "",
                 "reasoning": data.get("reasoning") or "",
                 "extra": {k: v for k, v in data.items()
-                          if k in ("skills", "present", "missing", "total_years", "trajectory")},
+                          if k in ("skills", "present", "missing", "total_years",
+                                       "internship_years", "roles", "trajectory")},
             }
 
         # Sequential on purpose. Ollama serialises requests anyway, so firing all
